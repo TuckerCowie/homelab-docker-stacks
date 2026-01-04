@@ -1,0 +1,178 @@
+version: "3.8"
+
+networks:
+  media-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  synology-media:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=100.98.188.126,rw,nfsvers=4,hard,timeo=600,retrans=2
+      device: ":/volume1/Media"
+
+  synology-torrents:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=100.98.188.126,rw,nfsvers=4,hard,timeo=600,retrans=2
+      device: ":/volume1/Media/torrents"
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: jellyfin-tailscale
+    hostname: jellyfin
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_ROUTES=172.25.0.0/16
+      - TS_EXTRA_ARGS=--advertise-exit-node --accept-routes
+    volumes:
+      - ./config/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 8080:8080
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - SERVER_COUNTRIES=Switzerland
+      - VPN_PORT_FORWARDING=on
+    volumes:
+      - ./config/gluetun:/gluetun
+    networks:
+      - media-network
+    restart: always
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: service:gluetun
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+      - WEBUI_PORT=8080
+    volumes:
+      - ./config/qbittorrent:/config
+      - synology-torrents:/data/torrents
+    restart: unless-stopped
+    depends_on:
+      gluetun:
+         condition: service_healthy
+
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 8096:8096
+    volumes:
+      - ./config/jellyfin:/config
+      - synology-media:/data/media
+    devices:
+      - /dev/dri:/dev/dri
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 9696:9696
+    volumes:
+      - ./config/prowlarr:/config
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - TZ=America/Chicago
+    ports:
+      - 8191:8191
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 8989:8989
+    volumes:
+      - ./config/sonarr:/config
+      - synology-media:/data/media
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 7878:7878
+    volumes:
+      - ./config/radarr:/config
+      - synology-media:/data/media
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 6767:6767
+    volumes:
+      - ./config/bazarr:/config
+      - synology-media:/data/media
+    networks:
+      - media-network
+    restart: unless-stopped
