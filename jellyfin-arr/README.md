@@ -19,7 +19,7 @@ Self-hosted media server stack with Jellyfin, *ARR suite (Sonarr, Radarr, Prowla
 
 4. **Create config directories:**
    ```bash
-   mkdir -p config/{jellyfin,qbittorrent,prowlarr,sonarr,radarr,bazarr,gluetun,tailscale}
+   mkdir -p config/{jellyfin,qbittorrent,prowlarr,sonarr,radarr,bazarr,jellyseerr,gluetun,tailscale}
    chown -R 1026:100 config/
    ```
 
@@ -40,6 +40,7 @@ Self-hosted media server stack with Jellyfin, *ARR suite (Sonarr, Radarr, Prowla
 - **radarr**: Movie manager (port 7878)
 - **prowlarr**: Indexer manager (port 9696)
 - **bazarr**: Subtitle manager (port 6767)
+- **jellyseerr**: Request manager (port 5055)
 - **qbittorrent**: Torrent client (port 8080, routed through VPN)
 - **gluetun**: VPN client (ProtonVPN WireGuard)
 - **flaresolverr**: Cloudflare bypass service (port 8191)
@@ -85,6 +86,7 @@ After deployment:
    - Radarr: `http://<tailscale-ip>:7878`
    - Prowlarr: `http://<tailscale-ip>:9696`
    - Bazarr: `http://<tailscale-ip>:6767`
+   - Jellyseerr: `http://<tailscale-ip>:5055`
    - qBittorrent: `http://<tailscale-ip>:8080`
 
 3. **Or configure your main reverse proxy** to point to the Tailscale IP
@@ -120,6 +122,14 @@ After deployment:
 3. Add subtitle providers
 4. Configure languages and quality settings
 
+### Jellyseerr
+1. Access Jellyseerr web UI
+2. Complete initial setup wizard
+3. Connect to Jellyfin (Settings → Services → Jellyfin)
+4. Connect to Sonarr (Settings → Services → Sonarr)
+5. Connect to Radarr (Settings → Services → Radarr)
+6. Configure user permissions and request limits
+
 ### qBittorrent
 1. Access qBittorrent web UI (default: admin/adminadmin)
 2. Change default password immediately
@@ -136,6 +146,7 @@ All configuration is stored in `./config/`:
 - `config/radarr/` - Radarr database and settings
 - `config/prowlarr/` - Prowlarr database and settings
 - `config/bazarr/` - Bazarr database and settings
+- `config/jellyseerr/` - Jellyseerr database and settings
 - `config/qbittorrent/` - qBittorrent settings
 - `config/gluetun/` - VPN client state
 - `config/tailscale/` - Tailscale state

@@ -176,3 +176,18 @@ services:
     networks:
       - media-network
     restart: unless-stopped
+
+  jellyseerr:
+    image: lscr.io/linuxserver/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 5055:5055
+    volumes:
+      - ./config/jellyseerr:/config
+    networks:
+      - media-network
+    restart: unless-stopped
