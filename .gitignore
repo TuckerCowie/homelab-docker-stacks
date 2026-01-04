@@ -1,0 +1,36 @@
+# Environment files with secrets
+.env
+*.env
+!.env.template
+
+# Data directories (contain large files and persistent data)
+data/
+*/data/
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.tar.gz
+*.zip
+backup/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker volumes (if accidentally created locally)
+*_data/

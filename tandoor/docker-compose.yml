@@ -1,0 +1,85 @@
+version: "3.8"
+
+networks:
+  tandoor-network:
+    driver: bridge
+  tailscale-tandoor:
+    driver: bridge
+
+services:
+  tandoor-db:
+    image: postgres:15-alpine
+    container_name: tandoor-db
+    environment:
+      - POSTGRES_DB=djangodb
+      - POSTGRES_USER=djangouser
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    networks:
+      - tandoor-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U djangouser -d djangodb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tandoor-web:
+    image: ghcr.io/tandoorrecipes/recipes:latest
+    container_name: tandoor-web
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_ENGINE=django.db.backends.postgresql
+      - POSTGRES_HOST=tandoor-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=djangodb
+      - POSTGRES_USER=djangouser
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TIMEZONE=America/Chicago
+      - GUNICORN_MEDIA=0
+      - REVERSE_PROXY_AUTH=0
+    volumes:
+      - ./data/staticfiles:/opt/recipes/staticfiles
+      - ./data/mediafiles:/opt/recipes/mediafiles
+    networks:
+      - tandoor-network
+    depends_on:
+      tandoor-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Internal nginx proxy - exposes app to Tailscale network
+  tandoor-nginx:
+    image: nginx:alpine
+    container_name: tandoor-nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./data/staticfiles:/static:ro
+      - ./data/mediafiles:/media:ro
+    networks:
+      - tandoor-network
+      - tailscale-tandoor
+    depends_on:
+      - tandoor-web
+    restart: unless-stopped
+
+  # Tailscale sidecar - provides secure network access
+  tandoor-tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tandoor-tailscale
+    hostname: tandoor
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--accept-routes
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - tailscale-tandoor
+    restart: unless-stopped
