@@ -1,0 +1,46 @@
+version: "3.8"
+
+networks:
+  portainer-network:
+    driver: bridge
+  tailscale-portainer:
+    driver: bridge
+
+volumes:
+  portainer-data:
+    driver: local
+
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - portainer-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - portainer-network
+    restart: unless-stopped
+
+  # Tailscale sidecar - provides secure network access
+  portainer-tailscale:
+    image: tailscale/tailscale:latest
+    container_name: portainer-tailscale
+    hostname: portainer
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--accept-routes
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - tailscale-portainer
+    restart: unless-stopped
+
+
