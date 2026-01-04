@@ -177,6 +177,8 @@ services:
       - media-network
     restart: unless-stopped
 
+  # todo: Add profilarr, Checkrr, Notifiarr, Sortarr
+
   jellyseerr:
     image: lscr.io/linuxserver/jellyseerr:latest
     container_name: jellyseerr
