@@ -121,7 +121,6 @@ services:
     ports:
       - 5055:5055
     volumes:
-      - ./config/jellyseerr:/app/config
     networks:
       - media-network
     restart: unless-stopped
@@ -201,4 +200,4 @@ services:
       - media-network
     restart: unless-stopped
 
-  
+  # todo: Add profilarr, Checkrr, Notifiarr, Sortarr, tdarr, unpackerr
