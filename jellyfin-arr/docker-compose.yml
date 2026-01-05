@@ -1,5 +1,13 @@
 version: "3.8"
 
+# IMPORTANT: Config Directory Permissions
+# All config directories must be owned by PUID:PGID (1026:100) and be writable.
+# If you encounter "readonly database" errors, run:
+#   sudo chown -R 1026:100 config/
+#   sudo find config/ -type d -exec chmod 755 {} \;
+#   sudo find config/ -type f -exec chmod 644 {} \;
+# This ensures containers can write to their databases and config files.
+
 networks:
   media-network:
     driver: bridge
@@ -88,7 +96,7 @@ services:
     image: lscr.io/linuxserver/jellyfin:latest
     container_name: jellyfin
     environment:
-      - PUID=1026
+      - PUID=1026  # todo: test changing these back to default 1000
       - PGID=100
       - TZ=America/Chicago
     ports:
@@ -97,7 +105,23 @@ services:
       - ./config/jellyfin:/config
       - synology-media:/data/media
     devices:
-      - /dev/dri:/dev/dri
+      - /dev/dri/card1:/dev/dri/card1          # Changed from card0
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  jellyseerr:
+    image: lscr.io/linuxserver/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - PUID=1026
+      - PGID=100
+      - TZ=America/Chicago
+    ports:
+      - 5055:5055
+    volumes:
+      - ./config/jellyseerr:/app/config
     networks:
       - media-network
     restart: unless-stopped
@@ -177,17 +201,4 @@ services:
       - media-network
     restart: unless-stopped
 
-  jellyseerr:
-    image: lscr.io/linuxserver/jellyseerr:latest
-    container_name: jellyseerr
-    environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
-    ports:
-      - 5055:5055
-    volumes:
-      - ./config/jellyseerr:/config
-    networks:
-      - media-network
-    restart: unless-stopped
+  

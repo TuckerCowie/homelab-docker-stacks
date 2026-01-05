@@ -20,7 +20,9 @@ Self-hosted media server stack with Jellyfin, *ARR suite (Sonarr, Radarr, Prowla
 4. **Create config directories:**
    ```bash
    mkdir -p config/{jellyfin,qbittorrent,prowlarr,sonarr,radarr,bazarr,jellyseerr,gluetun,tailscale}
-   chown -R 1026:100 config/
+   sudo chown -R 1026:100 config/
+   sudo find config/ -type d -exec chmod 755 {} \;
+   sudo find config/ -type f -exec chmod 644 {} \;
    ```
 
 5. **Deploy:**
@@ -195,6 +197,11 @@ Or use the automated backup script (see root README).
 - Check VPN connection status
 - Verify download paths are writable
 - Check qBittorrent logs: `docker compose logs -f qbittorrent`
+
+**Database "readonly" errors (Sonarr/Radarr):**
+- This indicates incorrect permissions on config directories
+- Fix with: `sudo chown -R 1026:100 config/ && sudo find config/ -type d -exec chmod 755 {} \; && sudo find config/ -type f -exec chmod 644 {} \;`
+- Restart affected services: `docker compose restart sonarr radarr`
 
 **Transcoding issues:**
 - Verify GPU is accessible: `docker exec jellyfin ls -la /dev/dri`
