@@ -8,6 +8,24 @@ version: "3.8"
 #   sudo find config/ -type f -exec chmod 644 {} \;
 # This ensures containers can write to their databases and config files.
 
+# YAML anchors for common variables
+x-common-vars: &common-vars
+  PUID: 1026
+  PGID: 100
+  TZ: America/Chicago
+
+x-common-network: &common-network
+  networks:
+    - media-network
+
+x-common-restart: &common-restart
+  restart: unless-stopped
+
+x-common-service: &common-service
+  networks:
+    - media-network
+  restart: unless-stopped
+
 networks:
   media-network:
     driver: bridge
@@ -31,29 +49,54 @@ volumes:
       device: ":/volume1/Media/torrents"
 
 services:
-  tailscale:
-    image: tailscale/tailscale:latest
-    container_name: jellyfin-tailscale
-    hostname: jellyfin
+  # Bazarr - Subtitle manager. Fetches subtitles for media managed by Sonarr/Radarr.
+  # Requires media volume access to read video files.
+  # Unique config: None (uses common PUID/PGID/TZ)
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
     environment:
-      - TS_AUTHKEY=${TS_AUTHKEY}
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_USERSPACE=false
-      - TS_ROUTES=172.25.0.0/16
-      - TS_EXTRA_ARGS=--advertise-exit-node --accept-routes
+      <<: *common-vars
+    ports:
+      - 6767:6767
     volumes:
-      - ./config/tailscale:/var/lib/tailscale
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv6.conf.all.forwarding=1
-    networks:
-      - media-network
-    restart: unless-stopped
+      - ./config/bazarr:/config
+      - synology-media:/data/media
+    <<: *common-service
 
+  # Checkrr - Health monitoring service for *ARR stack.
+  # Monitors Sonarr, Radarr, Prowlarr, etc. and alerts on issues.
+  # Port: 5454
+  # Unique config: None (uses common PUID/PGID/TZ)
+  # NOTE: Image lscr.io/linuxserver/checkrr:latest does not exist. Commented out until correct image is found.
+  # checkrr:
+  #   image: lscr.io/linuxserver/checkrr:latest
+  #   container_name: checkrr
+  #   environment:
+  #     <<: *common-vars
+  #   ports:
+  #     - 5454:5454
+  #   volumes:
+  #     - ./config/checkrr:/config
+  #   <<: *common-service
+
+  # FlareSolverr - Cloudflare bypass service for indexers protected by Cloudflare.
+  # Used by Prowlarr when needed.
+  # Unique config: LOG_LEVEL (logging verbosity)
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - TZ=America/Chicago
+    ports:
+      - 8191:8191
+    <<: *common-service
+
+  # Gluetun - VPN client container using ProtonVPN WireGuard.
+  # Routes qBittorrent traffic through VPN for privacy.
+  # Unique config: VPN_SERVICE_PROVIDER, VPN_TYPE, WIREGUARD_PRIVATE_KEY (secret from .env),
+  #                SERVER_COUNTRIES, VPN_PORT_FORWARDING
   gluetun:
     image: qmcgaw/gluetun
     container_name: gluetun
@@ -71,133 +114,204 @@ services:
       - VPN_PORT_FORWARDING=on
     volumes:
       - ./config/gluetun:/gluetun
-    networks:
-      - media-network
+    <<: *common-network
     restart: always
 
-  qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
-    container_name: qbittorrent
-    network_mode: service:gluetun
-    environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
-      - WEBUI_PORT=8080
-    volumes:
-      - ./config/qbittorrent:/config
-      - synology-torrents:/data/torrents
-    restart: unless-stopped
-    depends_on:
-      gluetun:
-         condition: service_healthy
-
+  # Jellyfin - Media server with hardware-accelerated transcoding via Intel Quick Sync Video (QSV).
+  # Serves media library from NAS to clients.
+  # Requires GPU device passthrough for transcoding.
+  # Unique config: None (uses common PUID/PGID/TZ), requires /dev/dri device passthrough
+  # NOTE: Uncomment devices section below if /dev/dri exists on host (check with: ls -la /dev/dri)
+  #       For Intel N150, ensure intel-media-va-driver is installed: sudo apt install intel-media-va-driver
   jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
     container_name: jellyfin
     environment:
-      - PUID=1026  # todo: test changing these back to default 1000
-      - PGID=100
-      - TZ=America/Chicago
+      - PUID=1000
+      - GID=1000
     ports:
       - 8096:8096
     volumes:
       - ./config/jellyfin:/config
       - synology-media:/data/media
     devices:
-      - /dev/dri/card1:/dev/dri/card1          # Changed from card0
-      - /dev/dri/renderD128:/dev/dri/renderD128
-    networks:
-      - media-network
-    restart: unless-stopped
+      - /dev/dri:/dev/dri
+    <<: *common-service
 
+  # Jellyseerr - Request management interface for Jellyfin.
+  # Users request movies/TV shows which are forwarded to Sonarr/Radarr.
+  # Requires connections to Jellyfin, Sonarr, and Radarr.
+  # Unique config: None (uses common PUID/PGID/TZ), configured via web UI
   jellyseerr:
-    image: lscr.io/linuxserver/jellyseerr:latest
+    image: fallenbagel/jellyseerr:latest
     container_name: jellyseerr
     environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
+      <<: *common-vars
     ports:
       - 5055:5055
     volumes:
-    networks:
-      - media-network
-    restart: unless-stopped
+      - ./config/jellyseerr:/app/config
+    <<: *common-service
 
+  # Notifiarr - Unified notification service.
+  # Aggregates notifications from all *ARR services and sends to Discord, Slack, email, etc.
+  # Port: 5455
+  # Unique config: NOTIFIARR_API_KEY (secret from .env), may require additional service-specific API keys
+  notifiarr:
+    image: golift/notifiarr:latest
+    container_name: notifiarr
+    environment:
+      <<: *common-vars
+      NOTIFIARR_API_KEY: ${NOTIFIARR_API_KEY:-}
+    ports:
+      - 5455:5455
+    volumes:
+      - ./config/notifiarr:/config
+    <<: *common-service
+
+  # Profilarr - Quality profile manager for *ARR services.
+  # Manages and syncs quality profiles across Sonarr/Radarr instances.
+  # Port: 9697
+  # Unique config: None (uses common PUID/PGID/TZ)
+  profilarr:
+    image: santiagosayshey/profilarr:latest
+    container_name: profilarr
+    environment:
+      <<: *common-vars
+    ports:
+      - 9697:9697
+    volumes:
+      - ./config/profilarr:/config
+    <<: *common-service
+
+  # Prowlarr - Indexer manager for *ARR services.
+  # Manages torrent/usenet indexers and syncs to Sonarr/Radarr.
+  # No media access needed.
+  # Unique config: None (uses common PUID/PGID/TZ)
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
     environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
+      <<: *common-vars
     ports:
       - 9696:9696
     volumes:
       - ./config/prowlarr:/config
-    networks:
-      - media-network
-    restart: unless-stopped
+    <<: *common-service
 
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
+  # qBittorrent - BitTorrent client routed through gluetun VPN.
+  # Downloads media files to NAS torrents volume.
+  # Configured via web UI on port 8080.
+  # Unique config: WEBUI_PORT (8080)
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: service:gluetun
     environment:
-      - LOG_LEVEL=info
-      - TZ=America/Chicago
-    ports:
-      - 8191:8191
-    networks:
-      - media-network
-    restart: unless-stopped
-
-  sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
-    container_name: sonarr
-    environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
-    ports:
-      - 8989:8989
+      <<: *common-vars
+      WEBUI_PORT: 8080
     volumes:
-      - ./config/sonarr:/config
-      - synology-media:/data/media
-    networks:
-      - media-network
+      - ./config/qbittorrent:/config
+      - synology-torrents:/data/torrents
     restart: unless-stopped
+    depends_on:
+      gluetun:
+        condition: service_healthy
 
+  # Radarr - Movie manager.
+  # Monitors movies, searches via Prowlarr, sends to qBittorrent, and organizes files on NAS.
+  # Requires media volume access.
+  # Unique config: None (uses common PUID/PGID/TZ)
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
+      <<: *common-vars
     ports:
       - 7878:7878
     volumes:
       - ./config/radarr:/config
       - synology-media:/data/media
-    networks:
-      - media-network
-    restart: unless-stopped
+    <<: *common-service
 
-  bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
-    container_name: bazarr
+  # Sonarr - TV show manager.
+  # Monitors TV shows, searches for episodes via Prowlarr, sends to qBittorrent, and organizes files on NAS.
+  # Requires media volume access.
+  # Unique config: None (uses common PUID/PGID/TZ)
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
     environment:
-      - PUID=1026
-      - PGID=100
-      - TZ=America/Chicago
+      <<: *common-vars
     ports:
-      - 6767:6767
+      - 8989:8989
     volumes:
-      - ./config/bazarr:/config
+      - ./config/sonarr:/config
       - synology-media:/data/media
-    networks:
-      - media-network
-    restart: unless-stopped
+    <<: *common-service
 
-  # todo: Add profilarr, Checkrr, Notifiarr, Sortarr, tdarr, unpackerr
+  # Tailscale - Tailscale sidecar container providing secure VPN access to the media stack.
+  # Routes Docker network traffic through Tailscale mesh network for remote access without exposing ports publicly.
+  # Unique config: TS_AUTHKEY (secret from .env), TS_ROUTES (Docker network subnet),
+  #                TS_EXTRA_ARGS (additional Tailscale arguments)
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: jellyfin-tailscale
+    hostname: jellyfin
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_ROUTES=172.25.0.0/16
+      - TS_EXTRA_ARGS=--accept-routes
+    volumes:
+      - ./config/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    <<: *common-service
+
+  # Tdarr - Transcoding and media library management.
+  # Converts media files to desired formats/codecs, removes unwanted audio/subtitle tracks, optimizes file sizes.
+  # Ports: 8265 (server), 8266 (node)
+  # Requires media volume access.
+  # Unique config: None (uses common PUID/PGID/TZ), requires separate server and node config directories
+  tdarr:
+    image: haveagitgat/tdarr:latest
+    container_name: tdarr
+    environment:
+      <<: *common-vars
+    ports:
+      - 8265:8265
+      - 8266:8266
+    volumes:
+      - ./config/tdarr/server:/app/server/config
+      - ./config/tdarr/node:/app/node/config
+      - synology-media:/data/media
+    <<: *common-service
+
+  # Unpackerr - Automatic archive extractor.
+  # Monitors Sonarr/Radarr downloads and automatically extracts RAR/ZIP files.
+  # Port: 5489
+  # Requires Sonarr/Radarr API keys and downloads volume access.
+  # Unique config: UN_SONARR_0_URL, UN_SONARR_0_API_KEY (secret from .env),
+  #                UN_RADARR_0_URL, UN_RADARR_0_API_KEY (secret from .env)
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    environment:
+      <<: *common-vars
+      UN_SONARR_0_URL: http://sonarr:8989
+      UN_SONARR_0_API_KEY: ${SONARR_API_KEY:-}
+      UN_RADARR_0_URL: http://radarr:7878
+      UN_RADARR_0_API_KEY: ${RADARR_API_KEY:-}
+    ports:
+      - 5489:5489
+    volumes:
+      - ./config/unpackerr:/config
+      - synology-torrents:/data/torrents
+    <<: *common-service
