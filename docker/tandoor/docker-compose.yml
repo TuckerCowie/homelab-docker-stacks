@@ -1,0 +1,101 @@
+# =============================================================================
+# Tandoor Recipes - Recipe Management
+# =============================================================================
+# Self-hosted recipe management with meal planning.
+# All data persisted to Synology NAS for easy backup.
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # POSTGRESQL - Database
+  # ===========================================================================
+  tandoor-db:
+    image: postgres:15-alpine
+    container_name: tandoor-db
+    environment:
+      - POSTGRES_USER=tandoor
+      - POSTGRES_PASSWORD=${TANDOOR_DB_PASSWORD}
+      - POSTGRES_DB=tandoor
+    volumes:
+      - /mnt/docker-data/tandoor-db:/var/lib/postgresql/data
+    networks:
+      - tandoor-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tandoor -d tandoor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # TANDOOR - Recipe Application
+  # ===========================================================================
+  tandoor:
+    image: vabene1111/recipes:latest
+    container_name: tandoor
+    depends_on:
+      tandoor-db:
+        condition: service_healthy
+    environment:
+      # Database
+      - DB_ENGINE=django.db.backends.postgresql
+      - POSTGRES_HOST=tandoor-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=tandoor
+      - POSTGRES_PASSWORD=${TANDOOR_DB_PASSWORD}
+      - POSTGRES_DB=tandoor
+
+      # Security
+      - SECRET_KEY=${TANDOOR_SECRET_KEY}
+      - DEBUG=0
+      - ALLOWED_HOSTS=*
+
+      # Features
+      - ENABLE_SIGNUP=0
+      - ENABLE_PDF_EXPORT=1
+
+      # Timezone
+      - TZ=${TZ}
+
+      # Gunicorn settings
+      - GUNICORN_WORKERS=2
+      - GUNICORN_THREADS=2
+
+    volumes:
+      # Static files (CSS, JS, etc.)
+      - /mnt/docker-data/tandoor-static:/opt/recipes/staticfiles
+      # Media files (recipe images, uploads)
+      - /mnt/docker-data/tandoor-media:/opt/recipes/mediafiles
+    ports:
+      - "${TANDOOR_PORT:-8180}:8080"
+    networks:
+      - tandoor-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # NGINX - Static File Server (Optional)
+  # ===========================================================================
+  # Uncomment if you want nginx to serve static files for better performance
+  # tandoor-nginx:
+  #   image: nginx:alpine
+  #   container_name: tandoor-nginx
+  #   depends_on:
+  #     - tandoor
+  #   volumes:
+  #     - /mnt/docker-data/tandoor-static:/static:ro
+  #     - /mnt/docker-data/tandoor-media:/media:ro
+  #     - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  #   ports:
+  #     - "8180:80"
+  #   networks:
+  #     - tandoor-network
+  #   restart: unless-stopped
+
+networks:
+  tandoor-network:
+    name: tandoor-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.0.0/24
+          gateway: 172.27.0.1

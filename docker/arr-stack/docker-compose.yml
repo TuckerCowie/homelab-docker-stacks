@@ -1,0 +1,543 @@
+# =============================================================================
+# Arr Stack - Media Automation & Support Services
+# =============================================================================
+# Core Services: Sonarr, Radarr, Prowlarr, qBittorrent (via Gluetun VPN)
+# Support Services: Jellyseerr, Bazarr, Tdarr, Unpackerr, Notifiarr, FlareSolverr, Recyclarr, qbit_manage, qbitrr
+#
+# Network Strategy:
+# - All services route internet traffic through Gluetun VPN
+# - Local network traffic (192.168.1.0/24) bypasses VPN for Jellyfin access
+# - Services communicate via localhost (shared network namespace)
+# - All ports exposed through Gluetun container
+# - Jellyseerr connects to Jellyfin at 192.168.1.52:8096 (configure in web UI)
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # GLUETUN - VPN Container
+  # ===========================================================================
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      # qBittorrent WebUI (exposed through VPN)
+      - "8080:8080"
+      # qBittorrent incoming connections
+      - "6881:6881"
+      - "6881:6881/udp"
+      # Prowlarr
+      - "9696:9696"
+      # Sonarr
+      - "8989:8989"
+      # Radarr
+      - "7878:7878"
+      # Jellyseerr
+      - "5055:5055"
+      # Bazarr
+      - "6767:6767"
+      # Tdarr
+      - "8265:8265"
+      - "8266:8266"
+      # Notifiarr
+      - "5454:5454"
+      # FlareSolverr
+      - "8191:8191"
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES:-Netherlands}
+      - TZ=${TZ}
+      # Health check settings
+      - HEALTH_VPN_DURATION_INITIAL=30s
+      - HEALTH_SUCCESS_WAIT_DURATION=10s
+      # Performance optimizations
+      - FIREWALL_VPN_INPUT_PORTS=6881
+      # Allow localhost and local network access (bypasses VPN)
+      # This enables services to access Jellyfin and other local resources
+      - FIREWALL_OUTBOUND_SUBNETS=127.0.0.0/8,192.168.4.0/24,10.0.0.0/8,172.16.0.0/12
+      - LOG_LEVEL=info
+    volumes:
+      - /mnt/docker-data/gluetun:/gluetun
+    networks:
+      - arr-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # QBITTORRENT - Torrent Client (behind VPN)
+  # ===========================================================================
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - /mnt/docker-data/qbittorrent:/config
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v2/app/version || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # PROWLARR - Indexer Manager
+  # ===========================================================================
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK=002
+    volumes:
+      - /mnt/docker-data/prowlarr:/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9696/api/v1/system/status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # SONARR - TV Show Management
+  # ===========================================================================
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK=002
+    volumes:
+      - /mnt/docker-data/sonarr:/config
+      - /mnt/media/tv:/tv
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8989/api/v3/system/status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 768M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # RADARR - Movie Management
+  # ===========================================================================
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK=002
+    volumes:
+      - /mnt/docker-data/radarr:/config
+      - /mnt/media/movies:/movies
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7878/api/v3/system/status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 768M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # JELLYSEERR - Media Request Management
+  # ===========================================================================
+  # User-facing request portal for movies and TV shows
+  # Connects to Jellyfin on separate host (192.168.1.52:8096 by default)
+  # Configure Jellyfin URL in Jellyseerr web UI: http://192.168.1.52:8096
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ}
+      - LOG_LEVEL=info
+      - NODE_ENV=production
+      # Jellyfin connection (configure in web UI, this is just documentation)
+      # JELLYFIN_URL=http://192.168.1.52:8096
+      # JELLYFIN_API_KEY=${JELLYFIN_API_KEY:-}
+    volumes:
+      - /mnt/docker-data/jellyseerr:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5055/api/v1/status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # BAZARR - Subtitle Management
+  # ===========================================================================
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/docker-data/bazarr:/config
+      - /mnt/media/movies:/movies
+      - /mnt/media/tv:/tv
+    restart: unless-stopped
+
+  # ===========================================================================
+  # TDARR - Media Transcoding
+  # ===========================================================================
+  # Distributed transcoding to optimize media files
+  # Converts media to consistent formats for direct play on TV/phone
+  # Uses Intel QSV hardware acceleration for faster transcoding
+  tdarr:
+    image: ghcr.io/haveagitgat/tdarr:latest
+    container_name: tdarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK_SET=002
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - internalNode=true
+      - inContainer=true
+      - nodeName=BeeNode
+    devices:
+      # Intel iGPU for hardware acceleration (QSV)
+      - /dev/dri:/dev/dri
+    volumes:
+      - /mnt/docker-data/tdarr/server:/app/server
+      - /mnt/docker-data/tdarr/configs:/app/configs
+      - /mnt/docker-data/tdarr/logs:/app/logs
+      - /mnt/docker-data/tdarr-cache:/temp
+      - /mnt/media:/media
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8265 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Higher limit for transcoding
+          memory: 4G       # More memory for video processing
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # UNPACKERR - Archive Extraction
+  # ===========================================================================
+  # Automatically extracts downloaded archives for Sonarr/Radarr
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ}
+      # Sonarr configuration (using localhost since sharing network namespace)
+      - UN_SONARR_0_URL=http://localhost:8989
+      - UN_SONARR_0_API_KEY=${SONARR_API_KEY:-}
+      - UN_SONARR_0_PATHS_0=/torrents
+      # Radarr configuration (using localhost since sharing network namespace)
+      - UN_RADARR_0_URL=http://localhost:7878
+      - UN_RADARR_0_API_KEY=${RADARR_API_KEY:-}
+      - UN_RADARR_0_PATHS_0=/torrents
+    volumes:
+      - /mnt/docker-data/unpackerr:/config
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+
+  # ===========================================================================
+  # NOTIFIARR - Notification Client
+  # ===========================================================================
+  # Unified notifications for all *arr services
+  notifiarr:
+    image: golift/notifiarr:latest
+    container_name: notifiarr
+    hostname: notifiarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ}
+      - DN_API_KEY=${NOTIFIARR_API_KEY:-}
+    volumes:
+      - /mnt/docker-data/notifiarr:/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  # ===========================================================================
+  # FLARESOLVERR - Cloudflare Bypass
+  # ===========================================================================
+  # Required by Prowlarr for some indexers with Cloudflare protection
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ}
+      - LOG_LEVEL=info
+      - CAPTCHA_SOLVER=none
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8191/v1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # RECYCLARR - Quality Profile Sync
+  # ===========================================================================
+  # Syncs quality profiles and settings from TRaSH Guides to Sonarr/Radarr
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/docker-data/recyclarr:/config
+    restart: unless-stopped
+
+  # ===========================================================================
+  # QBIT_MANAGE - qBittorrent Management Tool
+  # ===========================================================================
+  # Automates qBittorrent tasks: tagging, categorizing, cleanup, rechecking
+  # Connects to qBittorrent at localhost:8080 (shared network namespace)
+  qbit_manage:
+    image: ghcr.io/stuffanthings/qbit_manage:latest
+    container_name: qbit_manage
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/docker-data/qbit_manage:/config
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # QBITRR - qBittorrent Automation & Management
+  # ===========================================================================
+  # Advanced qBittorrent management and automation tool
+  # Connects to qBittorrent at localhost:8080 (shared network namespace)
+  qbitrr:
+    image: ghcr.io/drazzilb08/qbitrr:latest
+    container_name: qbitrr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/docker-data/qbitrr:/config
+      - /mnt/torrents:/torrents
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  arr-network:
+    name: arr-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24
+          gateway: 172.25.0.1
