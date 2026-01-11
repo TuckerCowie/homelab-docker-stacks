@@ -1,0 +1,39 @@
+name: Validate Docker Compose
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Validate Docker Compose Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        run: |
+          # Docker Compose is pre-installed in ubuntu-latest
+          docker compose version
+
+      - name: Find and validate all compose files
+        run: |
+          echo "🔍 Finding all docker-compose.yml files..."
+          find . -name "docker-compose.yml" -type f | while read -r compose_file; do
+            echo ""
+            echo "📋 Validating: $compose_file"
+            if docker compose -f "$compose_file" config --quiet; then
+              echo "✅ $compose_file is valid"
+            else
+              echo "❌ $compose_file has errors"
+              exit 1
+            fi
+          done
+          
+          # Count files validated
+          COMPOSE_COUNT=$(find . -name "docker-compose.yml" -type f | wc -l)
+          echo ""
+          echo "✅ Successfully validated $COMPOSE_COUNT docker-compose.yml file(s)"
